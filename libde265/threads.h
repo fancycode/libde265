@@ -143,14 +143,14 @@ void   decrement_tasks_pending(thread_pool* pool);
 #ifdef _WIN64
     #define ATOMIC_ADD_AND_FETCH_32(var, val)       InterlockedAdd((volatile long*)(var), (val))
     #define ATOMIC_SUB_AND_FETCH_32(var, val)       InterlockedAdd((volatile long*)(var), -(val))
-    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var), (val))
+    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var))
 
     #define ATOMIC_OR_AND_FETCH_8(var, val)         _InterlockedOr8((volatile char *)(var), (val))
     #define ATOMIC_AND_AND_FETCH_8(var, val)        _InterlockedAnd8((volatile char *)(var), (val))
 #elif _WIN32
     #define ATOMIC_ADD_AND_FETCH_32(var, val)       (InterlockedExchangeAdd((volatile long*)(var), (val)) + (val))
     #define ATOMIC_SUB_AND_FETCH_32(var, val)       (InterlockedExchangeAdd((volatile long*)(var), -(val)) - (val))
-    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var), (val))
+    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var))
 
     #define ATOMIC_OR_AND_FETCH_8(var, val)         _InterlockedOr8((volatile char *)(var), (val))
     #define ATOMIC_AND_AND_FETCH_8(var, val)        _InterlockedAnd8((volatile char *)(var), (val))
