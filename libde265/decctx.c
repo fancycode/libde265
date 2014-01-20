@@ -32,6 +32,7 @@
 #include <math.h>
 
 #include "fallback.h"
+#include "threads.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -1124,24 +1125,24 @@ int get_log2CbSize_cbUnits(const decoder_context* ctx, int x0, int y0)
 
 void    set_deblk_flags(decoder_context* ctx, int x0,int y0, uint8_t flags)
 {
-  ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags |= flags;
+  ATOMIC_OR_AND_FETCH_8(&ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags, flags);
 }
 
 uint8_t get_deblk_flags(const decoder_context* ctx, int x0,int y0)
 {
-  return ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags;
+  return ATOMIC_GET_8(&ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags);
 }
 
 void    set_deblk_bS(decoder_context* ctx, int x0,int y0, uint8_t bS)
 {
   uint8_t* data = &ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags;
-  *data &= ~DEBLOCK_BS_MASK;
-  *data |= bS;
+  ATOMIC_AND_AND_FETCH_8(data, ~DEBLOCK_BS_MASK);
+  ATOMIC_OR_AND_FETCH_8(data, bS);
 }
 
 uint8_t get_deblk_bS(const decoder_context* ctx, int x0,int y0)
 {
-  return ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags & DEBLOCK_BS_MASK;
+  return ATOMIC_GET_8(&ctx->deblk_info[x0/4 + y0/4*ctx->deblk_width].deblock_flags) & DEBLOCK_BS_MASK;
 }
 
 void            set_sao_info(decoder_context* ctx, int ctbX,int ctbY,const sao_info* saoinfo)
@@ -1225,11 +1226,7 @@ uint8_t decrease_CTB_deblocking_cnt(decoder_context* ctx,int ctbX,int ctbY)
 {
   int idx = ctbX + ctbY*ctx->current_sps->PicWidthInCtbsY;
 
-#ifndef _WIN32
-  uint8_t blkcnt = __sync_sub_and_fetch(&ctx->ctb_info[idx].task_blocking_cnt, 1);
-#else
-  uint8_t blkcnt = InterlockedDecrement((volatile long*)(&ctx->ctb_info[idx].task_blocking_cnt));
-#endif
+  uint8_t blkcnt = ATOMIC_DEC_32(&ctx->ctb_info[idx].task_blocking_cnt);
   return blkcnt;
 }
 

@@ -192,11 +192,7 @@ static THREAD_RESULT worker_thread(THREAD_PARAM pool_ptr)
     */
 
     //pool->num_threads_working--;
-#ifndef _WIN32
-    int pending = __sync_sub_and_fetch(&pool->tasks_pending, 1);
-#else
-    int pending = InterlockedDecrement((volatile long*)(&pool->tasks_pending));
-#endif
+    int pending = ATOMIC_DEC_32(&pool->tasks_pending);
 
 
     /*
@@ -317,11 +313,7 @@ void   decrement_tasks_pending(thread_pool* pool)
   //pool->tasks_pending--;
   //de265_mutex_unlock(&pool->mutex);
 
-#ifndef _WIN32
-    __sync_sub_and_fetch(&pool->tasks_pending, 1);
-#else
-    InterlockedDecrement((volatile long*)(&pool->tasks_pending));
-#endif
+    ATOMIC_DEC_32(&pool->tasks_pending);
 }
 
 

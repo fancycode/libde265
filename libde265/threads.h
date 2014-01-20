@@ -40,6 +40,7 @@ typedef pthread_cond_t   de265_cond;
 
 #else // _WIN32
 #include <windows.h>
+#include <intrin.h>
 #include "../extra/win32cond.h"
 
 typedef HANDLE              de265_thread;
@@ -138,6 +139,32 @@ void        stop_thread_pool(thread_pool* pool); // do not process remaining tas
 
 void   add_task(thread_pool* pool, const thread_task* task);
 void   decrement_tasks_pending(thread_pool* pool);
+
+#ifdef _WIN64
+    #define ATOMIC_ADD_AND_FETCH_32(var, val)       InterlockedAdd((volatile long*)(var), (val))
+    #define ATOMIC_SUB_AND_FETCH_32(var, val)       InterlockedAdd((volatile long*)(var), -(val))
+    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var), (val))
+
+    #define ATOMIC_OR_AND_FETCH_8(var, val)         _InterlockedOr8((volatile char *)(var), (val))
+    #define ATOMIC_AND_AND_FETCH_8(var, val)        _InterlockedAnd8((volatile char *)(var), (val))
+#elif _WIN32
+    #define ATOMIC_ADD_AND_FETCH_32(var, val)       (InterlockedExchangeAdd((volatile long*)(var), (val)) + (val))
+    #define ATOMIC_SUB_AND_FETCH_32(var, val)       (InterlockedExchangeAdd((volatile long*)(var), -(val)) - (val))
+    #define ATOMIC_DEC_32(var)                      InterlockedDecrement((volatile long*)(var), (val))
+
+    #define ATOMIC_OR_AND_FETCH_8(var, val)         _InterlockedOr8((volatile char *)(var), (val))
+    #define ATOMIC_AND_AND_FETCH_8(var, val)        _InterlockedAnd8((volatile char *)(var), (val))
+#else
+    #define ATOMIC_ADD_AND_FETCH_32(var, val)       __sync_add_and_fetch((var), (val))
+    #define ATOMIC_SUB_AND_FETCH_32(var, val)       __sync_sub_and_fetch((var), (val))
+    #define ATOMIC_DEC_32(var)                      __sync_sub_and_fetch((var), 1)
+
+    #define ATOMIC_OR_AND_FETCH_8(var, val)         __sync_or_and_fetch((var), (val))
+    #define ATOMIC_AND_AND_FETCH_8(var, val)        __sync_add_and_fetch((var), (val))
+#endif
+
+#define ATOMIC_GET_32(var)      ATOMIC_ADD_AND_FETCH_32(var, 0)
+#define ATOMIC_GET_8(var)       ATOMIC_OR_AND_FETCH_8(var, 0)
 
 //bool   deblock_task(thread_pool* pool, int task_id); // returns false if task does not exist
 

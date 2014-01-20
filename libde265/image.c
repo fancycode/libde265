@@ -19,6 +19,7 @@
  */
 
 #include "image.h"
+#include "threads.h"
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
@@ -177,13 +178,7 @@ void de265_copy_image(de265_image* dest, const de265_image* src)
 void increase_pending_tasks(de265_image* img, int n)
 {
   //de265_mutex_lock(&img->mutex);
-#ifdef _WIN64
-  int pending = InterlockedAdd((volatile long*)(&img->tasks_pending), n);
-#elif _WIN32
-  int pending = InterlockedExchangeAdd((volatile long*)(&img->tasks_pending), n) + n;
-#else
-  int pending = __sync_add_and_fetch(&img->tasks_pending, n);
-#endif
+  int pending = ATOMIC_ADD_AND_FETCH_32(&img->tasks_pending, n);
 
   //printf("++ pending [%p]: %d\n",img,pending);
   //de265_mutex_unlock(&img->mutex);
@@ -192,13 +187,7 @@ void increase_pending_tasks(de265_image* img, int n)
 void decrease_pending_tasks(de265_image* img, int n)
 {
   //de265_mutex_lock(&img->mutex);
-#ifdef _WIN64
-  int pending = InterlockedAdd((volatile long*)(&img->tasks_pending), -n);
-#elif _WIN32
-  int pending = InterlockedExchangeAdd((volatile long*)(&img->tasks_pending), -n) - n;
-#else
-  int pending = __sync_sub_and_fetch(&img->tasks_pending, n);
-#endif
+  int pending = ATOMIC_SUB_AND_FETCH_32(&img->tasks_pending, n);
   //de265_mutex_unlock(&img->mutex);
 
   //printf("-- pending [%p]: %d\n",img,pending);
@@ -213,10 +202,15 @@ void decrease_pending_tasks(de265_image* img, int n)
   }
 }
 
+int get_pending_tasks(de265_image* img)
+{
+  return ATOMIC_GET_32(&img->tasks_pending);
+}
+
 void wait_for_completion(de265_image* img)
 {
   de265_mutex_lock(&img->mutex);
-  while (img->tasks_pending>0) {
+  while (ATOMIC_GET_32(&img->tasks_pending) > 0) {
     de265_cond_wait(&img->finished_cond, &img->mutex);
   }
   de265_mutex_unlock(&img->mutex);

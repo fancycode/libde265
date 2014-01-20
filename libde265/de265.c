@@ -496,7 +496,7 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
 
       // TODO: hard-coded thread context
 
-      assert(ctx->img->tasks_pending == 0);
+      assert(get_pending_tasks(ctx->img) == 0);
       //increase_pending_tasks(ctx->img, nRows);
       ctx->thread_pool.tasks_pending = 0;
 

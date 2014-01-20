@@ -127,6 +127,7 @@ void de265_copy_image(de265_image* dest, const de265_image* src);
 
 void increase_pending_tasks(de265_image* img, int n);
 void decrease_pending_tasks(de265_image* img, int n);
+int get_pending_tasks(de265_image* img);
 void wait_for_completion(de265_image* img);  // block until image is decoded by background threads
 
 // --- value logging ---
