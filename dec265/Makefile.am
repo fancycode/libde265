@@ -4,10 +4,18 @@ bin_PROGRAMS = dec265
 AM_CPPFLAGS = -I../libde265
 
 dec265_DEPENDENCIES = ../libde265/libde265.la
-dec265_CXXFLAGS = $(VIDEOGFX_CFLAGS)
-dec265_LDFLAGS = $(VIDEOGFX_LIBS)
-dec265_LDADD = ../libde265/libde265.la -lstdc++ -lpthread
+dec265_CXXFLAGS = $(VIDEOGFX_CFLAGS) $(SDL_CFLAGS)
+dec265_LDFLAGS = $(VIDEOGFX_LIBS) $(SDL_LIBS)
+dec265_LDADD = ../libde265/libde265.la -lstdc++
 dec265_SOURCES = dec265.cc
+
+if HAVE_SDL
+  dec265_SOURCES += sdl.cc
+endif
+
+if MINGW
+  dec265_LDFLAGS += -static-libgcc -static-libstdc++
+endif
 
 EXTRA_DIST = Makefile.vc7 \
   CMakeLists.txt \

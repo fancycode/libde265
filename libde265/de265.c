@@ -25,6 +25,7 @@
 #include "decctx.h"
 #include "slice_func.h"
 #include "pps_func.h"
+#include "sps_func.h"
 #include "util.h"
 #include "scan.h"
 #include "image.h"
@@ -53,9 +54,15 @@ LIBDE265_API const char* de265_get_error_text(de265_error err)
   case DE265_ERROR_CODED_PARAMETER_OUT_OF_RANGE: return "coded parameter out of range";
   case DE265_ERROR_IMAGE_BUFFER_FULL: return "DPB/output queue full";
   case DE265_ERROR_CANNOT_START_THREADPOOL: return "cannot start decoding threads";
+  case DE265_ERROR_LIBRARY_INITIALIZATION_FAILED: return "global library initialization failed";
+  case DE265_ERROR_LIBRARY_NOT_INITIALIZED: return "cannot free library data (not initialized";
 
-  case DE265_ERROR_MAX_THREAD_CONTEXTS_EXCEEDED: return "internal error: maximum number of thread contexts exceeded";
-  case DE265_ERROR_MAX_NUMBER_OF_SLICES_EXCEEDED: return "internal error: maximum number of slices exceeded";
+  case DE265_ERROR_MAX_THREAD_CONTEXTS_EXCEEDED:
+    return "internal error: maximum number of thread contexts exceeded";
+  case DE265_ERROR_MAX_NUMBER_OF_SLICES_EXCEEDED:
+    return "internal error: maximum number of slices exceeded";
+  case DE265_ERROR_SCALING_LIST_NOT_IMPLEMENTED:
+    return "scaling list not implemented";
 
   case DE265_WARNING_NO_WPP_CANNOT_USE_MULTITHREADING:
     return "Cannot run decoder multi-threaded because stream does not support WPP";
@@ -67,6 +74,30 @@ LIBDE265_API const char* de265_get_error_text(de265_error err)
     return "Incorrect entry-point offset";
   case DE265_WARNING_CTB_OUTSIDE_IMAGE_AREA:
     return "CTB outside of image area (concealing stream error...)";
+  case DE265_WARNING_SPS_HEADER_INVALID:
+    return "sps header invalid";
+  case DE265_WARNING_PPS_HEADER_INVALID:
+    return "pps header invalid";
+  case DE265_WARNING_SLICEHEADER_INVALID:
+    return "slice header invalid";
+  case DE265_WARNING_INCORRECT_MOTION_VECTOR_SCALING:
+    return "impossible motion vector scaling";
+  case DE265_WARNING_NONEXISTING_PPS_REFERENCED:
+    return "non-existing PPS referenced";
+  case DE265_WARNING_NONEXISTING_SPS_REFERENCED:
+    return "non-existing SPS referenced";
+  case DE265_WARNING_BOTH_PREDFLAGS_ZERO:
+    return "both predFlags[] are zero in MC";
+  case DE265_WARNING_NONEXISTING_REFERENCE_PICTURE_ACCESSED:
+    return "non-existing reference picture accessed";
+  case DE265_WARNING_NUMMVP_NOT_EQUAL_TO_NUMMVQ:
+    return "numMV_P != numMV_Q in deblocking";
+  case DE265_WARNING_NUMBER_OF_SHORT_TERM_REF_PIC_SETS_OUT_OF_RANGE:
+    return "number of short-term ref-pic-sets out of range";
+  case DE265_WARNING_SHORT_TERM_REF_PIC_SET_OUT_OF_RANGE:
+    return "short-term ref-pic-set index out of range";
+  case DE265_WARNING_FAULTY_REFERENCE_PICTURE_LIST:
+    return "faulty reference picture list";
 
   default: return "unknown error";
   }
@@ -76,19 +107,78 @@ LIBDE265_API const char* de265_get_error_text(de265_error err)
 
 
 
-LIBDE265_API void de265_init()
+static de265_sync_int de265_init_count = 0;
+
+LIBDE265_API de265_error de265_init()
 {
+  int cnt = de265_sync_add_and_fetch(&de265_init_count,1);
+  if (cnt>1) {
+    // we are not the first -> already initialized
+
+    return DE265_OK;
+  }
+
+
+  // do initializations
+
   init_scan_orders();
+
+  if (!alloc_and_init_significant_coeff_ctxIdx_lookupTable()) {
+    de265_sync_sub_and_fetch(&de265_init_count,1);
+    return DE265_ERROR_LIBRARY_INITIALIZATION_FAILED;
+  }
+
+  return DE265_OK;
+}
+
+LIBDE265_API de265_error de265_free()
+{
+  int cnt = de265_sync_sub_and_fetch(&de265_init_count,1);
+  if (cnt<0) {
+    de265_sync_add_and_fetch(&de265_init_count,1);
+    return DE265_ERROR_LIBRARY_NOT_INITIALIZED;
+  }
+
+  if (cnt==0) {
+    free_significant_coeff_ctxIdx_lookupTable();
+  }
+
+  return DE265_OK;
 }
 
 
 LIBDE265_API de265_decoder_context* de265_new_decoder()
 {
+  de265_error init_err = de265_init();
+  if (init_err != DE265_OK) {
+    return NULL;
+  }
+
   decoder_context* ctx = (decoder_context*)calloc(sizeof(decoder_context),1);
-  if (!ctx) { return NULL; }
+  if (!ctx) {
+    de265_free();
+    return NULL;
+  }
 
   init_decoder_context(ctx);
+
   return (de265_decoder_context*)ctx;
+}
+
+
+LIBDE265_API de265_error de265_free_decoder(de265_decoder_context* de265ctx)
+{
+  decoder_context* ctx = (decoder_context*)de265ctx;
+
+  if (ctx->num_worker_threads>0) {
+    //flush_thread_pool(&ctx->thread_pool);
+    stop_thread_pool(&ctx->thread_pool);
+  }
+
+  free_decoder_context(ctx);
+  free(de265ctx);
+
+  return de265_free();
 }
 
 
@@ -105,20 +195,6 @@ LIBDE265_API de265_error de265_start_worker_threads(de265_decoder_context* de265
   else {
     return DE265_OK;
   }
-}
-
-
-LIBDE265_API void de265_free_decoder(de265_decoder_context* de265ctx)
-{
-  decoder_context* ctx = (decoder_context*)de265ctx;
-
-  if (ctx->num_worker_threads>0) {
-    flush_thread_pool(&ctx->thread_pool);
-    stop_thread_pool(&ctx->thread_pool);
-  }
-
-  free_decoder_context(ctx);
-  free(de265ctx);
 }
 
 
@@ -212,12 +288,12 @@ static de265_error process_data(decoder_context* ctx, const uint8_t* data, int l
       else if (*data==1) {
 
 #if DEBUG_INSERT_STREAM_ERRORS
-        if ((rand()%100)<10 && ctx->nal_data.size>0) {
+        if ((rand()%100)<90 && ctx->nal_data.size>0) {
           int pos = rand()%ctx->nal_data.size;
           int bit = rand()%8;
           ctx->nal_data.data[pos] ^= 1<<bit;
 
-          printf("inserted error...\n");
+          //printf("inserted error...\n");
         }
 #endif
 
@@ -238,7 +314,7 @@ static de265_error process_data(decoder_context* ctx, const uint8_t* data, int l
         }
 
         // when there are no free image buffers in the DPB, pause decoding
-        if (!has_free_dpb_picture(ctx)) {
+        if (!has_free_dpb_picture(ctx, false)) {
           data++;
           return err;
         }
@@ -298,7 +374,7 @@ static de265_error de265_decode_pending_data(de265_decoder_context* de265ctx)
 {
   decoder_context* ctx = (decoder_context*)de265ctx;
 
-  if (!has_free_dpb_picture(ctx)) {
+  if (!has_free_dpb_picture(ctx, false)) {
     return DE265_OK;
   }
 
@@ -354,7 +430,7 @@ LIBDE265_API de265_error de265_decode_data(de265_decoder_context* de265ctx, cons
   de265_error err = DE265_OK;
   int nBytesProcessed = 0;
 
-  if (has_free_dpb_picture(ctx)) {
+  if (has_free_dpb_picture(ctx, false)) {
     err = process_data(ctx,(const uint8_t*)data,len, &nBytesProcessed);
   }
 
@@ -383,12 +459,12 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
   decoder_context* ctx = (decoder_context*)de265ctx;
 
   /*
-  if (ctx->num_skipped_bytes>0) {
+    if (ctx->num_skipped_bytes>0) {
     printf("skipped bytes:\n  ");
     for (int i=0;i<ctx->num_skipped_bytes;i++)
     printf("%d ",ctx->skipped_bytes[i]);
     printf("\n");
-  }
+    }
   */
 
   de265_error err = DE265_OK;
@@ -418,104 +494,113 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
 
     slice_segment_header* hdr = &ctx->slice[sliceIndex];
     hdr->slice_index = sliceIndex;
-    read_slice_segment_header(&reader,hdr,ctx);
-    dump_slice_segment_header(hdr, ctx);
-
-    if ((err = process_slice_segment_header(ctx, hdr)) != DE265_OK)
-      { return err; }
-
-    skip_bits(&reader,1); // TODO: why?
-    prepare_for_CABAC(&reader);
-
-
-    // modify entry_point_offsets
-
-    int headerLength = reader.data - data->data;
-    for (int i=0;i<ctx->num_skipped_bytes;i++)
-      {
-        ctx->skipped_bytes[i] -= headerLength;
-      }
-
-    for (int i=0;i<hdr->num_entry_point_offsets;i++) {
-      for (int k=ctx->num_skipped_bytes-1;k>=0;k--)
-        if (ctx->skipped_bytes[k] <= hdr->entry_point_offset[i]) {
-          hdr->entry_point_offset[i] -= k+1;
-          break;
-        }
-    }
-
-
-    int nRows = hdr->num_entry_point_offsets +1;
-
-    bool use_WPP = (ctx->num_worker_threads > 0 &&
-                    ctx->current_pps->entropy_coding_sync_enabled_flag);
-
-    if (ctx->num_worker_threads > 0 &&
-        ctx->current_pps->entropy_coding_sync_enabled_flag == false) {
-      add_warning(ctx, DE265_WARNING_NO_WPP_CANNOT_USE_MULTITHREADING, true);
-    }
-
-    if (!use_WPP) {
-      init_thread_context(&hdr->thread_context[0]);
-
-      init_CABAC_decoder(&hdr->thread_context[0].cabac_decoder,
-                         reader.data,
-                         reader.bytes_remaining);
-
-      hdr->thread_context[0].shdr = hdr;
-      hdr->thread_context[0].decctx = ctx;
-
-
-      // fixed context 0
-      if ((err=read_slice_segment_data(ctx, &hdr->thread_context[0])) != DE265_OK)
-        { return err; }
+    bool continueDecoding;
+    err = read_slice_segment_header(&reader,hdr,ctx, &continueDecoding);
+    if (!continueDecoding) {
+      return err;
     }
     else {
-      if (nRows > MAX_THREAD_CONTEXTS) {
-        return DE265_ERROR_MAX_THREAD_CONTEXTS_EXCEEDED;
+      if (ctx->param_slice_headers_fd>=0) {
+        dump_slice_segment_header(hdr, ctx, ctx->param_slice_headers_fd);
       }
 
-      for (int i=0;i<nRows;i++) {
-        int dataStartIndex;
-        if (i==0) { dataStartIndex=0; }
-        else      { dataStartIndex=hdr->entry_point_offset[i-1]; }
+      if (process_slice_segment_header(ctx, hdr, &err) == false)
+        {
+          ctx->img->integrity = INTEGRITY_NOT_DECODED;
+          return err;
+        }
 
-        int dataEnd;
-        if (i==nRows-1) dataEnd = reader.bytes_remaining;
-        else            dataEnd = hdr->entry_point_offset[i];
+      skip_bits(&reader,1); // TODO: why?
+      prepare_for_CABAC(&reader);
 
-        init_thread_context(&hdr->thread_context[i]);
 
-        init_CABAC_decoder(&hdr->thread_context[i].cabac_decoder,
-                           &reader.data[dataStartIndex],
-                           dataEnd-dataStartIndex);
+      // modify entry_point_offsets
 
-        hdr->thread_context[i].shdr = hdr;
-        hdr->thread_context[i].decctx = ctx;
-      }
+      int headerLength = reader.data - data->data;
+      for (int i=0;i<ctx->num_skipped_bytes;i++)
+        {
+          ctx->skipped_bytes[i] -= headerLength;
+        }
 
-      // TODO: hard-coded thread context
-
-      assert(ctx->img->tasks_pending == 0);
-      //increase_pending_tasks(ctx->img, nRows);
-      ctx->thread_pool.tasks_pending = 0;
-
-      //printf("-------- decode --------\n");
-
-      add_CTB_decode_task_syntax(&hdr->thread_context[0], 0,0  ,0,0, NULL);
-
-      /*
-      for (int x=0;x<ctx->current_sps->PicWidthInCtbsY;x++)
-        for (int y=0;y<ctx->current_sps->PicHeightInCtbsY;y++)
-          {
-            add_CTB_decode_task_syntax(&hdr->thread_context[y], x,y);
+      for (int i=0;i<hdr->num_entry_point_offsets;i++) {
+        for (int k=ctx->num_skipped_bytes-1;k>=0;k--)
+          if (ctx->skipped_bytes[k] <= hdr->entry_point_offset[i]) {
+            hdr->entry_point_offset[i] -= k+1;
+            break;
           }
-      */
+      }
 
-      wait_for_completion(ctx->img);
-      //flush_thread_pool(&ctx->thread_pool);
 
-      //printf("slice decoding finished\n");
+      int nRows = hdr->num_entry_point_offsets +1;
+
+      bool use_WPP = (ctx->num_worker_threads > 0 &&
+                      ctx->current_pps->entropy_coding_sync_enabled_flag);
+
+      if (ctx->num_worker_threads > 0 &&
+          ctx->current_pps->entropy_coding_sync_enabled_flag == false) {
+        add_warning(ctx, DE265_WARNING_NO_WPP_CANNOT_USE_MULTITHREADING, true);
+      }
+
+      if (!use_WPP) {
+        init_thread_context(&hdr->thread_context[0]);
+
+        init_CABAC_decoder(&hdr->thread_context[0].cabac_decoder,
+                           reader.data,
+                           reader.bytes_remaining);
+
+        hdr->thread_context[0].shdr = hdr;
+        hdr->thread_context[0].decctx = ctx;
+
+
+        // fixed context 0
+        if ((err=read_slice_segment_data(ctx, &hdr->thread_context[0])) != DE265_OK)
+          { return err; }
+      }
+      else {
+        if (nRows > MAX_THREAD_CONTEXTS) {
+          return DE265_ERROR_MAX_THREAD_CONTEXTS_EXCEEDED;
+        }
+
+        for (int i=0;i<nRows;i++) {
+          int dataStartIndex;
+          if (i==0) { dataStartIndex=0; }
+          else      { dataStartIndex=hdr->entry_point_offset[i-1]; }
+
+          int dataEnd;
+          if (i==nRows-1) dataEnd = reader.bytes_remaining;
+          else            dataEnd = hdr->entry_point_offset[i];
+
+          init_thread_context(&hdr->thread_context[i]);
+
+          init_CABAC_decoder(&hdr->thread_context[i].cabac_decoder,
+                             &reader.data[dataStartIndex],
+                             dataEnd-dataStartIndex);
+
+          hdr->thread_context[i].shdr = hdr;
+          hdr->thread_context[i].decctx = ctx;
+        }
+
+        // TODO: hard-coded thread context
+
+        assert(ctx->img->tasks_pending == 0);
+
+        //printf("-------- decode --------\n");
+
+        add_CTB_decode_task_syntax(&hdr->thread_context[0], 0,0  ,0,0, NULL);
+
+        /*
+          for (int x=0;x<ctx->current_sps->PicWidthInCtbsY;x++)
+          for (int y=0;y<ctx->current_sps->PicHeightInCtbsY;y++)
+          {
+          add_CTB_decode_task_syntax(&hdr->thread_context[y], x,y);
+          }
+        */
+
+        wait_for_completion(ctx->img);
+        //flush_thread_pool(&ctx->thread_pool);
+
+        //printf("slice decoding finished\n");
+      }
     }
   }
   else switch (nal_hdr.nal_unit_type) {
@@ -525,7 +610,9 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
 
         video_parameter_set vps;
         read_vps(&reader,&vps);
-        dump_vps(&vps);
+        if (ctx->param_vps_headers_fd>=0) {
+          dump_vps(&vps, ctx->param_vps_headers_fd);
+        }
 
         process_vps(ctx, &vps);
       }
@@ -537,10 +624,13 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
 
         seq_parameter_set sps;
 
-        if ((err=read_sps(&reader,&sps, &ctx->ref_pic_sets)) != DE265_OK) {
+        if ((err=read_sps(ctx, &reader,&sps, &ctx->ref_pic_sets)) != DE265_OK) {
           break;
         }
-        dump_sps(&sps, ctx->ref_pic_sets);
+
+        if (ctx->param_sps_headers_fd>=0) {
+          dump_sps(&sps, ctx->ref_pic_sets, ctx->param_sps_headers_fd);
+        }
 
         process_sps(ctx, &sps);
       }
@@ -553,10 +643,15 @@ de265_error de265_decode_NAL(de265_decoder_context* de265ctx, rbsp_buffer* data)
         pic_parameter_set pps;
 
         init_pps(&pps);
-        read_pps(&reader,&pps,ctx);
-        dump_pps(&pps);
+        bool success = read_pps(&reader,&pps,ctx);
 
-        process_pps(ctx,&pps);
+        if (ctx->param_pps_headers_fd>=0) {
+          dump_pps(&pps, ctx->param_pps_headers_fd);
+        }
+
+        if (success) {
+          process_pps(ctx,&pps);
+        }
       }
       break;
 
@@ -672,6 +767,37 @@ LIBDE265_API void de265_set_parameter_bool(de265_decoder_context* de265ctx, enum
 }
 
 
+LIBDE265_API void de265_set_parameter_int(de265_decoder_context* de265ctx, enum de265_param param, int value)
+{
+  decoder_context* ctx = (decoder_context*)de265ctx;
+
+  switch (param)
+    {
+    case DE265_DECODER_PARAM_DUMP_SPS_HEADERS:
+      ctx->param_sps_headers_fd = value;
+      break;
+
+    case DE265_DECODER_PARAM_DUMP_VPS_HEADERS:
+      ctx->param_vps_headers_fd = value;
+      break;
+
+    case DE265_DECODER_PARAM_DUMP_PPS_HEADERS:
+      ctx->param_pps_headers_fd = value;
+      break;
+
+    case DE265_DECODER_PARAM_DUMP_SLICE_HEADERS:
+      ctx->param_slice_headers_fd = value;
+      break;
+
+    default:
+      assert(false);
+      break;
+    }
+}
+
+
+
+
 LIBDE265_API int de265_get_parameter_bool(de265_decoder_context* de265ctx, enum de265_param param)
 {
   decoder_context* ctx = (decoder_context*)de265ctx;
@@ -701,10 +827,10 @@ LIBDE265_API int de265_get_image_width(const struct de265_image* img,int channel
 {
   switch (channel) {
   case 0:
-    return img->width;
+    return img->width_confwin;
   case 1:
   case 2:
-    return img->chroma_width;
+    return img->chroma_width_confwin;
   default:
     return 0;
   }
@@ -714,10 +840,10 @@ LIBDE265_API int de265_get_image_height(const struct de265_image* img,int channe
 {
   switch (channel) {
   case 0:
-    return img->height;
+    return img->height_confwin;
   case 1:
   case 2:
-    return img->chroma_height;
+    return img->chroma_height_confwin;
   default:
     return 0;
   }
@@ -728,21 +854,16 @@ LIBDE265_API enum de265_chroma de265_get_chroma_format(const struct de265_image*
   return img->chroma_format;
 }
 
-LIBDE265_API const uint8_t* de265_get_image_plane(const de265_image* img, int channel, int* out_stride)
+LIBDE265_API const uint8_t* de265_get_image_plane(const de265_image* img, int channel, int* stride)
 {
+  uint8_t* data;
+
   switch (channel) {
-  case 0:
-    if (out_stride) { *out_stride = img->stride; }
-    return img->y;
-
-  case 1:
-  case 2:
-    if (out_stride) { *out_stride = img->chroma_stride; }
-    if (channel==1) { return img->cb; }
-    else            { return img->cr; }
-
-  default:
-    if (out_stride) { *out_stride = 0; }
-    return NULL;
+  case 0: data = img->y_confwin;  if (stride) *stride = img->stride; break;
+  case 1: data = img->cb_confwin; if (stride) *stride = img->chroma_stride; break;
+  case 2: data = img->cr_confwin; if (stride) *stride = img->chroma_stride; break;
+  default: data = NULL; if (stride) *stride = 0; break;
   }
+
+  return data;
 }

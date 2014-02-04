@@ -19,6 +19,7 @@
  */
 
 #include "sps.h"
+#include "sps_func.h"
 #include "util.h"
 
 #include <assert.h>
@@ -29,7 +30,8 @@ static int SubWidthC[]  = { -1,2,2,1 };
 static int SubHeightC[] = { -1,2,1,1 };
 
 
-de265_error read_sps(bitreader* br, seq_parameter_set* sps, ref_pic_set** ref_pic_sets)
+de265_error read_sps(decoder_context* ctx, bitreader* br,
+                     seq_parameter_set* sps, ref_pic_set** ref_pic_sets)
 {
   sps->video_parameter_set_id = get_bits(br,4);
   sps->sps_max_sub_layers     = get_bits(br,3) +1;
@@ -141,8 +143,7 @@ de265_error read_sps(bitreader* br, seq_parameter_set* sps, ref_pic_set** ref_pi
     sps->sps_scaling_list_data_present_flag = get_bits(br,1);
     if (sps->sps_scaling_list_data_present_flag) {
 
-      assert(0);
-      //scaling_list_data()
+      return DE265_ERROR_SCALING_LIST_NOT_IMPLEMENTED;
     }
   }
 
@@ -158,6 +159,11 @@ de265_error read_sps(bitreader* br, seq_parameter_set* sps, ref_pic_set** ref_pi
   }
 
   sps->num_short_term_ref_pic_sets = get_uvlc(br);
+  if (sps->num_short_term_ref_pic_sets < 0 ||
+      sps->num_short_term_ref_pic_sets > 64) {
+    add_warning(ctx, DE265_WARNING_NUMBER_OF_SHORT_TERM_REF_PIC_SETS_OUT_OF_RANGE, false);
+    return DE265_ERROR_CODED_PARAMETER_OUT_OF_RANGE;
+  }
 
   // --- allocate reference pic set ---
 
@@ -173,7 +179,7 @@ de265_error read_sps(bitreader* br, seq_parameter_set* sps, ref_pic_set** ref_pi
 
     read_short_term_ref_pic_set(br,*ref_pic_sets, i, sps->num_short_term_ref_pic_sets);
 
-    dump_short_term_ref_pic_set(&(*ref_pic_sets)[i]);
+    // dump_short_term_ref_pic_set(&(*ref_pic_sets)[i], fh);
   }
 
   sps->long_term_ref_pics_present_flag = get_bits(br,1);
@@ -271,23 +277,37 @@ de265_error read_sps(bitreader* br, seq_parameter_set* sps, ref_pic_set** ref_pi
 
 
 
-void dump_sps(seq_parameter_set* sps, ref_pic_set* sets)
+void dump_sps(seq_parameter_set* sps, ref_pic_set* sets, int fd)
 {
   //#if (_MSC_VER >= 1500)
-#define LOG0(t) loginfo(LogHeaders, t)
-#define LOG1(t,d) loginfo(LogHeaders, t,d)
-#define LOG2(t,d1,d2) loginfo(LogHeaders, t,d1,d2)
-#define LOG3(t,d1,d2,d3) loginfo(LogHeaders, t,d1,d2,d3)
+  //#define LOG0(t) loginfo(LogHeaders, t)
+  //#define LOG1(t,d) loginfo(LogHeaders, t,d)
+  //#define LOG2(t,d1,d2) loginfo(LogHeaders, t,d1,d2)
+  //#define LOG3(t,d1,d2,d3) loginfo(LogHeaders, t,d1,d2,d3)
+
+  FILE* fh;
+  if (fd==1) fh=stdout;
+  else if (fd==2) fh=stderr;
+  else { return; }
+
+#define LOG0(t) log2fh(fh, t)
+#define LOG1(t,d) log2fh(fh, t,d)
+#define LOG2(t,d1,d2) log2fh(fh, t,d1,d2)
+#define LOG3(t,d1,d2,d3) log2fh(fh, t,d1,d2,d3)
+  
 
   LOG0("----------------- SPS -----------------\n");
   LOG1("video_parameter_set_id  : %d\n", sps->video_parameter_set_id);
   LOG1("sps_max_sub_layers      : %d\n", sps->sps_max_sub_layers);
   LOG1("sps_temporal_id_nesting_flag : %d\n", sps->sps_temporal_id_nesting_flag);
 
-  dump_profile_tier_level(&sps->profile_tier_level, sps->sps_max_sub_layers);
+  dump_profile_tier_level(&sps->profile_tier_level, sps->sps_max_sub_layers, fh);
 
   LOG1("seq_parameter_set_id    : %d\n", sps->seq_parameter_set_id);
-  LOG1("chroma_format_idc       : %d\n", sps->chroma_format_idc);
+  LOG2("chroma_format_idc       : %d (%s)\n", sps->chroma_format_idc,
+       sps->chroma_format_idc == 1 ? "4:2:0" :
+       sps->chroma_format_idc == 2 ? "4:2:2" :
+       sps->chroma_format_idc == 3 ? "4:4:4" : "unknown");
 
   if (sps->chroma_format_idc == 3) {
     LOG1("separate_colour_plane_flag : %d\n", sps->separate_colour_plane_flag);
@@ -333,7 +353,8 @@ void dump_sps(seq_parameter_set* sps, ref_pic_set* sets)
     //sps->sps_scaling_list_data_present_flag = get_bits(br,1);
     if (sps->sps_scaling_list_data_present_flag) {
 
-      assert(0);
+      LOG0("NOT IMPLEMENTED");
+      //assert(0);
       //scaling_list_data()
     }
   }
@@ -354,7 +375,7 @@ void dump_sps(seq_parameter_set* sps, ref_pic_set* sets)
 
   for (int i = 0; i < sps->num_short_term_ref_pic_sets; i++) {
     LOG1("ref_pic_set[ %2d ]: ",i);
-    dump_compact_short_term_ref_pic_set(&sets[i], 16);
+    dump_compact_short_term_ref_pic_set(&sets[i], 16, fh);
   }
 
   LOG1("long_term_ref_pics_present_flag : %d\n", sps->long_term_ref_pics_present_flag);

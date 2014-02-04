@@ -20,7 +20,6 @@
 
 #define DO_MEMORY_LOGGING 0
 
-
 #include "de265.h"
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -46,6 +45,10 @@ extern "C" {
 #if HAVE_VIDEOGFX
 #include <libvideogfx.hh>
 using namespace videogfx;
+#endif
+
+#if HAVE_SDL
+#include "sdl.hh"
 #endif
 
 extern "C" {
@@ -109,11 +112,34 @@ void display_image(const struct de265_image* img)
 }
 #endif
 
+#if HAVE_SDL
+SDL_YUV_Display sdlWin;
+bool sdl_active=false;
+
+bool display_sdl(const struct de265_image* img)
+{
+  if (!sdl_active) {
+    int width  = de265_get_image_width(img,0);
+    int height = de265_get_image_height(img,0);
+
+    sdl_active=true;
+    sdlWin.init(width,height);
+  }
+
+  sdlWin.display((uint8_t*)de265_get_image_plane(img,0,NULL),
+                 (uint8_t*)de265_get_image_plane(img,1,NULL),
+                 (uint8_t*)de265_get_image_plane(img,2,NULL));
+
+  return sdlWin.doQuit();
+}
+#endif
+
+
 #ifdef WIN32
 #include <time.h>
 #define WIN32_LEAN_AND_MEAN
 #include <winsock.h>
-int gettimeofday(struct timeval *tp, void *tzp)
+int gettimeofday(struct timeval *tp, void *)
 {
     time_t clock;
     struct tm tm;
@@ -128,7 +154,7 @@ int gettimeofday(struct timeval *tp, void *tzp)
     tm.tm_sec       = wtm.wSecond;
     tm. tm_isdst    = -1;
     clock = mktime(&tm);
-    tp->tv_sec = clock;
+    tp->tv_sec = (long) clock;
     tp->tv_usec = wtm.wMilliseconds * 1000;
 
     return (0);
@@ -143,7 +169,9 @@ bool quiet=false;
 bool check_hash=false;
 bool show_profile=false;
 bool show_help=false;
+bool dump_headers=false;
 bool write_yuv=false;
+bool output_with_videogfx=false;
 //std::string output_filename;
 uint32_t max_frames=UINT32_MAX;
 
@@ -153,13 +181,19 @@ static struct option long_options[] = {
   {"check-hash", no_argument,       0, 'c' },
   {"profile",    no_argument,       0, 'p' },
   {"frames",     required_argument, 0, 'f' },
-  {"output",     no_argument, 0, 'o' },
+  {"output",     no_argument,       0, 'o' },
+  {"dump",       no_argument,       0, 'd' },
+  {"videogfx",   no_argument,       0, 'V' },
   {"help",       no_argument,       0, 'h' },
   //{"verbose",    no_argument,       0, 'v' },
   {0,         0,                 0,  0 }
 };
 
+#ifdef HAVE___MALLOC_HOOK
 #ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 static void *(*old_malloc_hook)(size_t, const void *);
 
 static void *new_malloc_hook(size_t size, const void *caller) {
@@ -187,6 +221,9 @@ static void init_my_hooks(void) {
 #if DO_MEMORY_LOGGING
 void (*volatile __malloc_initialize_hook)(void) = init_my_hooks;
 #endif
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 #endif
 
 int main(int argc, char** argv)
@@ -194,8 +231,11 @@ int main(int argc, char** argv)
   while (1) {
     int option_index = 0;
 
-    int c = getopt_long(argc, argv, "qt:chpf:o",
-                        long_options, &option_index);
+    int c = getopt_long(argc, argv, "qt:chpf:od"
+#if HAVE_VIDEOGFX && HAVE_SDL
+                        "V"
+#endif
+                        , long_options, &option_index);
     if (c == -1)
       break;
 
@@ -207,6 +247,8 @@ int main(int argc, char** argv)
     case 'f': max_frames=atoi(optarg); break;
     case 'o': write_yuv=true; /*output_filename=optarg;*/ break;
     case 'h': show_help=true; break;
+    case 'd': dump_headers=true; break;
+    case 'V': output_with_videogfx=true; break;
     }
   }
 
@@ -221,6 +263,10 @@ int main(int argc, char** argv)
     fprintf(stderr,"  -p, --profile     show coding mode usage profile\n");
     fprintf(stderr,"  -f, --frames N    set number of frames to process\n");
     fprintf(stderr,"  -o, --output      write YUV reconstruction\n");
+    fprintf(stderr,"  -d, --dump        dump headers\n");
+#if HAVE_VIDEOGFX && HAVE_SDL
+    fprintf(stderr,"  -V, --videogfx    output with videogfx instead of SDL\n");
+#endif
     fprintf(stderr,"  -h, --help        show help\n");
 
     exit(show_help ? 0 : 5);
@@ -229,7 +275,6 @@ int main(int argc, char** argv)
 
   de265_error err =DE265_OK;
 
-  de265_init();
   de265_decoder_context* ctx = de265_new_decoder();
 
   if (argc>=3) {
@@ -239,6 +284,13 @@ int main(int argc, char** argv)
   }
 
   de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, check_hash);
+
+  if (dump_headers) {
+    de265_set_parameter_int(ctx, DE265_DECODER_PARAM_DUMP_SPS_HEADERS, 1);
+    de265_set_parameter_int(ctx, DE265_DECODER_PARAM_DUMP_VPS_HEADERS, 1);
+    de265_set_parameter_int(ctx, DE265_DECODER_PARAM_DUMP_PPS_HEADERS, 1);
+    de265_set_parameter_int(ctx, DE265_DECODER_PARAM_DUMP_SLICE_HEADERS, 1);
+  }
 
   FILE* fh = fopen(argv[optind], "rb");
   if (fh==NULL) {
@@ -280,14 +332,22 @@ int main(int argc, char** argv)
         const de265_image* img = de265_get_next_picture(ctx);
         if (img==NULL) break;
 
-        width  = img->width;
-        height = img->height;
+        width  = de265_get_image_width(img,0);
+        height = de265_get_image_height(img,0);
 
         framecnt++;
         //fprintf(stderr,"SHOW POC: %d\n",img->PicOrderCntVal);
 
         if (!quiet) {
-#if HAVE_VIDEOGFX
+#if HAVE_SDL && HAVE_VIDEOGFX
+          if (output_with_videogfx) { 
+            display_image(img);
+          } else {
+            stop = display_sdl(img);
+          }
+#elif HAVE_SDL
+          stop = display_sdl(img);
+#elif HAVE_VIDEOGFX
           display_image(img);
 #endif
 
@@ -323,7 +383,7 @@ int main(int argc, char** argv)
   gettimeofday(&tv_end, NULL);
 
   if (err != DE265_OK) {
-    fprintf(stderr,"decoding error: %s\n", de265_get_error_text(err));
+    fprintf(stderr,"decoding error: %s (%d)\n", de265_get_error_text(err), err);
   }
 
   double secs = tv_end.tv_sec-tv_start.tv_sec;

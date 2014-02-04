@@ -56,11 +56,14 @@ typedef enum {
   DE265_ERROR_CODED_PARAMETER_OUT_OF_RANGE,
   DE265_ERROR_IMAGE_BUFFER_FULL,
   DE265_ERROR_CANNOT_START_THREADPOOL,
+  DE265_ERROR_LIBRARY_INITIALIZATION_FAILED,
+  DE265_ERROR_LIBRARY_NOT_INITIALIZED,
 
   // --- errors that should become obsolete in later libde265 versions ---
 
   DE265_ERROR_MAX_THREAD_CONTEXTS_EXCEEDED = 500,
   DE265_ERROR_MAX_NUMBER_OF_SLICES_EXCEEDED = 501,
+  DE265_ERROR_SCALING_LIST_NOT_IMPLEMENTED = 502,
 
   // --- warnings ---
 
@@ -69,6 +72,18 @@ typedef enum {
   DE265_WARNING_PREMATURE_END_OF_SLICE_SEGMENT,
   DE265_WARNING_INCORRECT_ENTRY_POINT_OFFSET,
   DE265_WARNING_CTB_OUTSIDE_IMAGE_AREA,
+  DE265_WARNING_SPS_HEADER_INVALID,
+  DE265_WARNING_PPS_HEADER_INVALID,
+  DE265_WARNING_SLICEHEADER_INVALID,
+  DE265_WARNING_INCORRECT_MOTION_VECTOR_SCALING,
+  DE265_WARNING_NONEXISTING_PPS_REFERENCED,
+  DE265_WARNING_NONEXISTING_SPS_REFERENCED,
+  DE265_WARNING_BOTH_PREDFLAGS_ZERO,
+  DE265_WARNING_NONEXISTING_REFERENCE_PICTURE_ACCESSED,
+  DE265_WARNING_NUMMVP_NOT_EQUAL_TO_NUMMVQ,
+  DE265_WARNING_NUMBER_OF_SHORT_TERM_REF_PIC_SETS_OUT_OF_RANGE,
+  DE265_WARNING_SHORT_TERM_REF_PIC_SET_OUT_OF_RANGE,
+  DE265_WARNING_FAULTY_REFERENCE_PICTURE_LIST,
 } de265_error;
 
 LIBDE265_API const char* de265_get_error_text(de265_error err);
@@ -102,13 +117,14 @@ typedef void* de265_decoder_context; // private structure
 
 
 enum de265_param {
-  DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH /* Perform SEI hash check on decoded pictures. */
+  DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, /* (bool) Perform SEI hash check on decoded pictures. */
+  DE265_DECODER_PARAM_DUMP_SPS_HEADERS,    /* (int)  Dump headers to specified file-descriptor. */
+  DE265_DECODER_PARAM_DUMP_VPS_HEADERS,
+  DE265_DECODER_PARAM_DUMP_PPS_HEADERS,
+  DE265_DECODER_PARAM_DUMP_SLICE_HEADERS
 };
 
 
-
-/* Static library initialization. */
-LIBDE265_API void de265_init(void);
 
 /* Get a new decoder context. Must be freed with de265_free_decoder(). */
 LIBDE265_API de265_decoder_context* de265_new_decoder(void);
@@ -118,7 +134,7 @@ LIBDE265_API de265_decoder_context* de265_new_decoder(void);
 LIBDE265_API de265_error de265_start_worker_threads(de265_decoder_context*, int number_of_threads);
 
 /* Free decoder context. May only be called once on a context. */
-LIBDE265_API void de265_free_decoder(de265_decoder_context*);
+LIBDE265_API de265_error de265_free_decoder(de265_decoder_context*);
 
 
 /* Push more data into the decoder, must be raw h265.
@@ -152,8 +168,29 @@ LIBDE265_API de265_error de265_get_warning(de265_decoder_context*);
 /* Set decoding parameters. */
 LIBDE265_API void de265_set_parameter_bool(de265_decoder_context*, enum de265_param param, int value);
 
+LIBDE265_API void de265_set_parameter_int(de265_decoder_context*, enum de265_param param, int value);
+
 /* Get decoding parameters. */
 LIBDE265_API int  de265_get_parameter_bool(de265_decoder_context*, enum de265_param param);
+
+
+
+/* --- optional library initialization --- */
+
+/* Static library initialization. Must be paired with de265_free().
+   Initialization is optional, since it will be done implicitly in de265_new_decoder().
+   Return value is false if initialization failed.
+   Only call de265_free() when initialization was successful.
+   Multiple calls to 'init' are allowed, but must be matched with an equal number of 'free' calls.
+*/
+LIBDE265_API de265_error de265_init(void);
+
+/* Free global library data.
+   An implicit free call is made in de265_free_decoder().
+   Returns false if library was not initialized before, or if 'free' was called
+   more often than 'init'.
+ */
+LIBDE265_API de265_error de265_free(void);
 
 
 #ifdef __cplusplus

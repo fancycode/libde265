@@ -21,6 +21,12 @@
 #ifndef DE265_UTIL_H
 #define DE265_UTIL_H
 
+#ifndef _MSC_VER
+#include <inttypes.h>
+#endif
+
+#include <stdio.h>
+
 
 #ifdef _MSC_VER
 #define LIBDE265_DECLARE_ALIGNED( var, n ) __declspec(align(n)) var
@@ -34,6 +40,7 @@
 
 
 
+//inline uint8_t Clip1_8bit(int16_t value) { if (value<=0) return 0; else if (value>=255) return 255; else return value; }
 #define Clip1_8bit(value) ((value)<0 ? 0 : (value)>255 ? 255 : (value))
 #define Clip3(low,high,value) ((value)<(low) ? (low) : (value)>(high) ? (high) : (value))
 #define Sign(value) (((value)>0) ? 1 : ((value)<0) ? -1 : 0)
@@ -65,7 +72,7 @@ enum LogModule {
 };
 
 
-#if defined(DE265_LOG_ERROR) || defined(DE265_LOG_INFO) || defined(DE265_LOG_DEBUG) || defined(DE265_LOG_INFO)
+#if defined(DE265_LOG_ERROR) || defined(DE265_LOG_INFO) || defined(DE265_LOG_DEBUG) || defined(DE265_LOG_TRACE)
 # define DE265_LOGGING 1
 void enablelog();
 #else
@@ -101,5 +108,7 @@ void logtrace(enum LogModule module, const char* string, ...);
 #else
 #define logtrace(a,b, ...) { }
 #endif
+
+void log2fh(FILE* fh, const char* string, ...);
 
 #endif

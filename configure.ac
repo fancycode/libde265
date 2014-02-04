@@ -57,8 +57,7 @@ AC_TYPE_UINT64_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
-AC_CHECK_FUNCS([memmove memset])
+AC_CHECK_FUNCS([malloc memmove memset __malloc_hook __mingw_aligned_malloc __mingw_aligned_free])
 
 AC_SEARCH_LIBS([sqrt], [m])
 AC_SEARCH_LIBS([pthread_create], [pthread])
@@ -141,19 +140,27 @@ if eval "test x$enable_dec265 = x"      ; then enable_dec265=yes ; fi
 if eval "test x$enable_sherlock265 = x" ; then enable_sherlock265=yes ; fi
 
 if eval "test x$enable_dec265 = xyes" || eval "test x$enable_sherlock265 = xyes" ; then
-  AC_CHECK_PROG([HAVE_VIDEOGFX], [libvideogfx-config], [yes])
-  if eval "test x$HAVE_VIDEOGFX = xyes" ; then
-    VIDEOGFX_CFLAGS=`libvideogfx-config --cflags`
-    VIDEOGFX_LIBS=`libvideogfx-config --libs`
-    AC_SUBST(VIDEOGFX_CFLAGS)
-    AC_SUBST(VIDEOGFX_LIBS)
-    AC_DEFINE([HAVE_VIDEOGFX], [1], [Whether libvideogfx was found.])
-  else
-    echo "Did not find libvideogfx (is libvideogfx-config in your PATH ?)."
-    echo "... Disabling building of sherlock265 ..."
-    enable_sherlock265="no"
-  fi
+   PKG_CHECK_MODULES([VIDEOGFX], [libvideogfx],
+                     [AC_DEFINE([HAVE_VIDEOGFX], [1], [Whether libvideogfx was found.])
+                      AC_SUBST(VIDEOGFX_CFLAGS)
+                      AC_SUBST(VIDEOGFX_LIBS)],
+                     [enable_sherlock265="no"
+                      AC_MSG_WARN([Did not find libvideogfx, compilation of sherlock265 will be disabled.])]
+                     )
 fi
+
+if eval "test x$enable_dec265 = xyes" || eval "test x$enable_sherlock265 = xyes" ; then
+   PKG_CHECK_MODULES([SDL], [sdl],
+                     [AC_DEFINE([HAVE_SDL], [1], [Whether libSDL was found.])
+                      AC_SUBST(SDL_CFLAGS)
+                      AC_SUBST(SDL_LIBS)
+                      have_sdl="yes"],
+                     [have_sdl="no"
+                      AC_MSG_WARN([Did not find libsdl, video output of dec265 will be disabled.])]
+                     )
+fi
+
+AM_CONDITIONAL([HAVE_SDL], [test "x$have_sdl" != "xno"])
 
 if eval "test $enable_sherlock265 = yes" ; then
   PKG_CHECK_MODULES([QT], [QtCore QtGui])

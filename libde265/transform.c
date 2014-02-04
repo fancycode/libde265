@@ -111,25 +111,25 @@ void decode_quantization_parameters(decoder_context* ctx,
 
   int qPYA,qPYB;
 
-  if (available_zscan(ctx,xQG,yQG, xQG-1,yQG)) {
+  if (available_zscan(ctx->img,xQG,yQG, xQG-1,yQG)) {
     // unused: int xTmp = (xQG-1) >> sps->Log2MinTrafoSize;
     // unused: int yTmp = (yQG  ) >> sps->Log2MinTrafoSize;
     // unused: int minTbAddrA = pps->MinTbAddrZS[xTmp + yTmp*sps->PicWidthInTbsY];
     // unused: int ctbAddrA = (minTbAddrA>>2)*(sps->Log2CtbSizeY-sps->Log2MinTrafoSize);
 
-    qPYA = get_QPY(ctx,xQG-1,yQG);
+    qPYA = get_QPY(ctx->img,sps,xQG-1,yQG);
   }
   else {
     qPYA = qPY_PRED;
   }
 
-  if (available_zscan(ctx,xQG,yQG, xQG,yQG-1)) {
+  if (available_zscan(ctx->img,xQG,yQG, xQG,yQG-1)) {
     // unused: int xTmp = (xQG  ) >> sps->Log2MinTrafoSize;
     // unused: int yTmp = (yQG-1) >> sps->Log2MinTrafoSize;
     // unused: int minTbAddrA = pps->MinTbAddrZS[xTmp + yTmp*sps->PicWidthInTbsY];
     // unused: int ctbAddrA = (minTbAddrA>>2)*(sps->Log2CtbSizeY-sps->Log2MinTrafoSize);
 
-    qPYB = get_QPY(ctx,xQG,yQG-1);
+    qPYB = get_QPY(ctx->img,sps,xQG,yQG-1);
   }
   else {
     qPYB = qPY_PRED;
@@ -155,7 +155,7 @@ void decode_quantization_parameters(decoder_context* ctx,
   tctx->qPCbPrime = qPCb + sps->QpBdOffset_C;
   tctx->qPCrPrime = qPCr + sps->QpBdOffset_C;
 
-  set_QPY(ctx,xQG,yQG, QPY);
+  set_QPY(ctx->img,sps,pps,xQG,yQG, QPY);
   tctx->currentQPY = QPY;
 
   logtrace(LogTransform,"qPY(%d,%d)= %d\n",xC,yC,QPY);
@@ -190,7 +190,8 @@ static const int levelScale[] = { 40,45,51,57,64,72 };
 void scale_coefficients(decoder_context* ctx, thread_context* tctx,
                         int xT,int yT, // position of TU in frame (chroma adapted)
                         int x0,int y0, // position of CU in frame (chroma adapted)
-                        int nT, int cIdx)
+                        int nT, int cIdx,
+                        bool transform_skip_flag)
 {
   seq_parameter_set* sps = ctx->current_sps;
   slice_segment_header* shdr = tctx->shdr;
@@ -220,7 +221,7 @@ void scale_coefficients(decoder_context* ctx, thread_context* tctx,
 
   uint8_t* pred;
   int      stride;
-  get_image_plane(ctx,cIdx,&pred,&stride);
+  get_image_plane(ctx->img,cIdx,&pred,&stride);
   pred += xT + yT*stride;
 
   /*
@@ -249,14 +250,17 @@ void scale_coefficients(decoder_context* ctx, thread_context* tctx,
     logtrace(LogTransform,"bdShift=%d\n",bdShift);
 
     if (sps->scaling_list_enable_flag==0) {
+
+      const int m_x_y = 16;
+      const int offset = (1<<(bdShift-1));
+      const int fact = m_x_y * levelScale[qP%6] << (qP/6);
+
       for (int i=0;i<tctx->nCoeff[cIdx];i++) {
 
         int currCoeff  = tctx->coeffList[cIdx][i];
 
-        const int m_x_y = 16;
         currCoeff = Clip3(-32768,32767,
-                          ( (currCoeff * m_x_y * levelScale[qP%6] << (qP/6))
-                            + (1<<(bdShift-1)) ) >> bdShift);
+                          ( (currCoeff * fact + offset ) >> bdShift));
 
         tctx->coeffBuf[ tctx->coeffPos[cIdx][i] ] = currCoeff;
       }
@@ -279,9 +283,9 @@ void scale_coefficients(decoder_context* ctx, thread_context* tctx,
     logtrace(LogTransform,"bdShift2=%d\n",bdShift2);
 
     logtrace(LogSlice,"get_transform_skip_flag(%d,%d, cIdx=%d)=%d\n",xT,yT,cIdx,
-             get_transform_skip_flag(ctx,xT,yT,cIdx));
+             transform_skip_flag);
 
-    if (get_transform_skip_flag(ctx,xT,yT,cIdx)) { // NOTE: could add shortcut nT==4 && ...
+    if (transform_skip_flag) {
 
       ctx->lowlevel.transform_skip_8(pred, coeff, stride);
 
@@ -290,7 +294,7 @@ void scale_coefficients(decoder_context* ctx, thread_context* tctx,
     else {
       int trType;
 
-      if (nT==4 && cIdx==0 && get_pred_mode(ctx,xT,yT)==MODE_INTRA) {
+      if (nT==4 && cIdx==0 && get_pred_mode(ctx->img,ctx->current_sps,xT,yT)==MODE_INTRA) {
         trType=1;
       }
       else {

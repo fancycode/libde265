@@ -18,32 +18,15 @@
  * along with libde265.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef DE265_REFPIC_H
-#define DE265_REFPIC_H
+#ifndef DE265_SPS_FUNC_H
+#define DE265_SPS_FUNC_H
 
-#include "libde265/bitstream.h"
+#include "libde265/sps.h"
+#include "libde265/decctx.h"
 
+de265_error read_sps(decoder_context*, bitreader*, seq_parameter_set*, ref_pic_set**);
+void dump_sps(seq_parameter_set*, ref_pic_set* sets, int fd);
 
-#define MAX_NUM_REF_PICS 16
-
-typedef struct {
-  int NumDeltaPocs;
-  int NumNegativePics;
-  int NumPositivePics;
-
-  int DeltaPocS0[MAX_NUM_REF_PICS]; // sorted in decreasing order (e.g. -1, -2, -4, -7, ...)
-  int DeltaPocS1[MAX_NUM_REF_PICS]; // sorted in ascending order (e.g. 1, 2, 4, 7)
-
-  char UsedByCurrPicS0[MAX_NUM_REF_PICS];
-  char UsedByCurrPicS1[MAX_NUM_REF_PICS];
-
-  int NumPocTotalCurr;
-} ref_pic_set;
-
-
-void dump_short_term_ref_pic_set(ref_pic_set*, FILE* fh);
-void dump_compact_short_term_ref_pic_set(ref_pic_set* set, int range, FILE* fh);
-
-void read_short_term_ref_pic_set(bitreader* br, ref_pic_set* sets, int idxRps, int num_short_term_ref_pic_sets);
+void free_ref_pic_sets(ref_pic_set**);
 
 #endif

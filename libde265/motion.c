@@ -358,6 +358,13 @@ void generate_inter_prediction_samples(decoder_context* ctx,
 {
   const seq_parameter_set* sps = ctx->current_sps;
 
+  /*
+  if (vi->lum.predFlag[0]) {
+    assert(vi->lum.refIdx[0] >= 0);
+    assert(vi->lum.refIdx[0] <= 1);
+  }
+  */
+
   TotalPredCnt++;
 
   ALIGNED_16(int16_t) predSamplesL                 [2 /* LX */][MAX_CU_SIZE* MAX_CU_SIZE];
@@ -387,39 +394,39 @@ void generate_inter_prediction_samples(decoder_context* ctx,
     if (predFlag[l]) {
       // 8.5.3.2.1
 
+      if (vi->lum.refIdx[l] >= MAX_REF_PIC_LIST) {
+        ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+        add_warning(ctx,DE265_WARNING_NONEXISTING_REFERENCE_PICTURE_ACCESSED, false);
+        return;
+      }
+
       de265_image* refPic;
       refPic = &ctx->dpb[ shdr->RefPicList[l][vi->lum.refIdx[l]] ];
 
       logtrace(LogMotion, "refIdx: %d -> dpb[%d]\n", vi->lum.refIdx[l], shdr->RefPicList[l][vi->lum.refIdx[l]]);
 
-      assert(refPic->PicState != UnusedForReference);
+      if (refPic->PicState == UnusedForReference) {
+        //printf("state %d = %d\n",refPic->PicOrderCntVal, refPic->PicState);
+      }
+
+      //assert(refPic->PicState != UnusedForReference);
+      if (refPic->PicState == UnusedForReference) {
+        ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+        add_warning(ctx,DE265_WARNING_NONEXISTING_REFERENCE_PICTURE_ACCESSED, false);
+      }
+      else {
+        // 8.5.3.2.2
+
+        // TODO: must predSamples stride really be nCS or can it be somthing smaller like nPbW?
+        mc_luma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
+                predSamplesL[l],nCS, refPic->y,refPic->stride, nPbW,nPbH);
 
 
-      // 8.5.3.2.2
-
-      // TODO: must predSamples stride really be nCS or can it be somthing smaller like nPbW?
-      mc_luma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
-              predSamplesL[l],nCS, refPic->y,refPic->stride, nPbW,nPbH);
-
-
-      mc_chroma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
-                predSamplesC[0][l],nCS, refPic->cb,refPic->chroma_stride, nPbW/2,nPbH/2);
-      mc_chroma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
-                predSamplesC[1][l],nCS, refPic->cr,refPic->chroma_stride, nPbW/2,nPbH/2);
-
-
-      /*
-      for (int c=0;c<2;c++)
-        {
-          printf("tmpbuf cIdx=%d l=%d\n",c+1,l);
-          for (int y=0;y<nPbH/2;y++) {
-            for (int x=0;x<nPbW/2;x++) {
-              printf("%02x ", Clip1_8bit((predSamplesC[c][l][x+y*nCS] + 32)>>6));
-            }
-            printf("\n");
-          }
-        }
-      */
+        mc_chroma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
+                  predSamplesC[0][l],nCS, refPic->cb,refPic->chroma_stride, nPbW/2,nPbH/2);
+        mc_chroma(ctx, vi->lum.mv[l].x, vi->lum.mv[l].y, xP,yP,
+                  predSamplesC[1][l],nCS, refPic->cr,refPic->chroma_stride, nPbW/2,nPbH/2);
+      }
     }
   }
 
@@ -462,12 +469,18 @@ void generate_inter_prediction_samples(decoder_context* ctx,
         */
       }
       else {
-        assert(predFlag[0]==0 && predFlag[1]==0);
-        // TODO: check: could it be that predFlag[1] is 1 in P-slices ?
+        add_warning(ctx, DE265_WARNING_BOTH_PREDFLAGS_ZERO, false);
+        ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+
+        //assert(predFlag[0]==0 && predFlag[1]==0);
+        //assert(predFlag[0]==0);
+        // TODO: check: why can it be that predFlag[1] is 1 in P-slices,
+        // or both are zero ?
       }
     }
     else {
-      assert(false); // TODO
+      // TODO
+      assert(false);
     }
   }
   else {
@@ -527,7 +540,11 @@ void generate_inter_prediction_samples(decoder_context* ctx,
                                           predSamplesC[1][l],nCS, nPbW/2,nPbH/2);
     }
     else {
-      assert(false); // both predFlags == 0
+      // TODO: check why it can actually happen that both predFlags[] are false.
+      // For now, we ignore this and continue decoding.
+
+      add_warning(ctx, DE265_WARNING_BOTH_PREDFLAGS_ZERO, false);
+      ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
     }
   }
 
@@ -575,8 +592,12 @@ void generate_inter_prediction_samples(decoder_context* ctx,
 void logmvcand(PredVectorInfo p)
 {
   for (int v=0;v<2;v++) {
-    logtrace(LogMotion,"  %d: %s  %d;%d ref=%d\n", v, p.predFlag[v] ? "yes":"no ",
-             p.mv[v].x,p.mv[v].y, p.refIdx[v]);
+    if (p.predFlag[v]) {
+      logtrace(LogMotion,"  %d: %s  %d;%d ref=%d\n", v, p.predFlag[v] ? "yes":"no ",
+               p.mv[v].x,p.mv[v].y, p.refIdx[v]);
+    } else {
+      logtrace(LogMotion,"  %d: %s  --;-- ref=--\n", v, p.predFlag[v] ? "yes":"no ");
+    }
   }
 }
 
@@ -630,7 +651,7 @@ void derive_spatial_merging_candidates(const decoder_context* ctx,
   const pic_parameter_set* pps = ctx->current_pps;
   int log2_parallel_merge_level = pps->log2_parallel_merge_level;
 
-  enum PartMode PartMode = get_PartMode(ctx,xC,yC);
+  enum PartMode PartMode = get_PartMode(ctx->img,ctx->current_sps,xC,yC);
 
   // --- A1 ---
 
@@ -899,23 +920,30 @@ void derive_zero_motion_vector_candidates(decoder_context* ctx,
 }
 
 
-void scale_mv(MotionVector* out_mv, MotionVector mv, int colDist, int currDist)
+bool scale_mv(MotionVector* out_mv, MotionVector mv, int colDist, int currDist)
 {
   int td = Clip3(-128,127, colDist);
   int tb = Clip3(-128,127, currDist);
 
-  int tx = (16384 + (abs_value(td)>>1)) / td;
-  int distScaleFactor = Clip3(-4096,4095, (tb*tx+32)>>6);
-  out_mv->x = Clip3(-32768,32767,
-                    Sign(distScaleFactor*mv.x)*((abs_value(distScaleFactor*mv.x)+127)>>8));
-  out_mv->y = Clip3(-32768,32767,
-                    Sign(distScaleFactor*mv.y)*((abs_value(distScaleFactor*mv.y)+127)>>8));
+  if (td==0) {
+    *out_mv = mv;
+    return false;
+  }
+  else {
+    int tx = (16384 + (abs_value(td)>>1)) / td;
+    int distScaleFactor = Clip3(-4096,4095, (tb*tx+32)>>6);
+    out_mv->x = Clip3(-32768,32767,
+                      Sign(distScaleFactor*mv.x)*((abs_value(distScaleFactor*mv.x)+127)>>8));
+    out_mv->y = Clip3(-32768,32767,
+                      Sign(distScaleFactor*mv.y)*((abs_value(distScaleFactor*mv.y)+127)>>8));
+    return true;
+  }
 }
 
 
 // (L1003) 8.5.3.2.8
 
-void derive_collocated_motion_vectors(const decoder_context* ctx,
+void derive_collocated_motion_vectors(decoder_context* ctx,
                                       const slice_segment_header* shdr,
                                       int xP,int yP,
                                       int colPic,
@@ -927,7 +955,7 @@ void derive_collocated_motion_vectors(const decoder_context* ctx,
   logtrace(LogMotion,"derive_collocated_motion_vectors %d;%d\n",xP,yP);
 
   // TODO: has to get pred_mode from reference picture
-  enum PredMode predMode = get_img_pred_mode(ctx, &ctx->dpb[colPic], xColPb,yColPb);
+  enum PredMode predMode = get_pred_mode(&ctx->dpb[colPic],ctx->current_sps, xColPb,yColPb);
 
   if (predMode == MODE_INTRA) {
     out_mvLXCol->x = 0;
@@ -1013,7 +1041,11 @@ void derive_collocated_motion_vectors(const decoder_context* ctx,
       *out_mvLXCol = mvCol;
     }
     else {
-      scale_mv(out_mvLXCol, mvCol, colDist, currDist);
+      if (!scale_mv(out_mvLXCol, mvCol, colDist, currDist)) {
+        add_warning(ctx, DE265_WARNING_INCORRECT_MOTION_VECTOR_SCALING, false);
+        ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+      }
+
       logtrace(LogMotion,"scale: %d;%d to %d;%d\n",
                mvCol.x,mvCol.y, out_mvLXCol->x,out_mvLXCol->y);
     }
@@ -1022,7 +1054,7 @@ void derive_collocated_motion_vectors(const decoder_context* ctx,
 
 
 // 8.5.3.1.7
-void derive_temporal_luma_vector_prediction(const decoder_context* ctx,
+void derive_temporal_luma_vector_prediction(decoder_context* ctx,
                                             const slice_segment_header* shdr,
                                             int xP,int yP,
                                             int nPbW,int nPbH,
@@ -1260,7 +1292,7 @@ void derive_luma_motion_merge_mode(decoder_context* ctx,
 
 
 // 8.5.3.1.6
-void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
+void derive_spatial_luma_vector_prediction(decoder_context* ctx,
                                            const slice_segment_header* shdr,
                                            int xC,int yC,int nCS,int xP,int yP,
                                            int nPbW,int nPbH, int X,
@@ -1308,7 +1340,7 @@ void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
   for (int k=0;k<=1;k++) {
     if (availableA[k] &&
         out_availableFlagLXN[A]==0 &&
-        get_pred_mode(ctx,xA[k],yA[k]) != MODE_INTRA) {
+        get_pred_mode(ctx->img,ctx->current_sps,xA[k],yA[k]) != MODE_INTRA) {
 
       int Y=1-X;
       
@@ -1337,7 +1369,7 @@ void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
     int refPicList;
 
     if (availableA[k] &&
-        get_pred_mode(ctx,xA[k],yA[k]) != MODE_INTRA) {
+        get_pred_mode(ctx->img,ctx->current_sps,xA[k],yA[k]) != MODE_INTRA) {
 
       int Y=1-X;
       
@@ -1367,7 +1399,10 @@ void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
         int distA = ctx->img->PicOrderCntVal - refPicA->PicOrderCntVal;
         int distX = ctx->img->PicOrderCntVal - refPicX->PicOrderCntVal;
 
-        scale_mv(&out_mvLXN[A], out_mvLXN[A], distA, distX);
+        if (!scale_mv(&out_mvLXN[A], out_mvLXN[A], distA, distX)) {
+          add_warning(ctx, DE265_WARNING_INCORRECT_MOTION_VECTOR_SCALING, false);
+          ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+        }
       }
     }
   }
@@ -1469,7 +1504,10 @@ void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
           int distB = ctx->img->PicOrderCntVal - refPicB->PicOrderCntVal;
           int distX = ctx->img->PicOrderCntVal - refPicX->PicOrderCntVal;
 
-          scale_mv(&out_mvLXN[B], out_mvLXN[B], distB, distX);
+          if (!scale_mv(&out_mvLXN[B], out_mvLXN[B], distB, distX)) {
+            add_warning(ctx, DE265_WARNING_INCORRECT_MOTION_VECTOR_SCALING, false);
+            ctx->img->integrity = INTEGRITY_DECODING_ERRORS;
+          }
         }
       }
     }
@@ -1477,7 +1515,7 @@ void derive_spatial_luma_vector_prediction(const decoder_context* ctx,
 }
 
 // 8.5.3.1.5
-MotionVector luma_motion_vector_prediction(const decoder_context* ctx,
+MotionVector luma_motion_vector_prediction(decoder_context* ctx,
                                            thread_context* tctx,
                                            int xC,int yC,int nCS,int xP,int yP,
                                            int nPbW,int nPbH, int l,
@@ -1582,7 +1620,7 @@ void motion_vectors_and_ref_indices(decoder_context* ctx,
   int xP = xC+xB;
   int yP = yC+yB;
 
-  enum PredMode predMode = get_pred_mode(ctx, xC,yC);
+  enum PredMode predMode = get_pred_mode(ctx->img,ctx->current_sps, xC,yC);
 
   if (predMode == MODE_SKIP ||
       (predMode == MODE_INTER && tctx->merge_flag))
@@ -1668,7 +1706,7 @@ void inter_prediction(decoder_context* ctx,slice_segment_header* shdr,
   //int nCS_C = nCS_L>>1;
   int nCS1L = nCS_L>>1;
 
-  enum PartMode partMode = get_PartMode(ctx,xC,yC);
+  enum PartMode partMode = get_PartMode(ctx->img,ctx->current_sps,xC,yC);
   switch (partMode) {
   case PART_2Nx2N:
     decode_prediction_unit(ctx,shdr,xC,yC, 0,0, nCS_L, nCS_L,nCS_L, 0);

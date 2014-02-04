@@ -106,31 +106,6 @@ static const uint8_t renorm_table[32] =
     1,  1,  1,  1
   };
 
-static const uint8_t next_state_MPS_HM[128] =
-  {
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-    18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
-    34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
-    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
-    66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
-    82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
-    98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
-    114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 124, 125, 126, 127
-  };
-
-static const uint8_t next_state_LPS_HM[128] =
-  {
-    1, 0, 0, 1, 2, 3, 4, 5, 4, 5, 8, 9, 8, 9, 10, 11,
-    12, 13, 14, 15, 16, 17, 18, 19, 18, 19, 22, 23, 22, 23, 24, 25,
-    26, 27, 26, 27, 30, 31, 30, 31, 32, 33, 32, 33, 36, 37, 36, 37,
-    38, 39, 38, 39, 42, 43, 42, 43, 44, 45, 44, 45, 46, 47, 48, 49,
-    48, 49, 50, 51, 52, 53, 52, 53, 54, 55, 54, 55, 56, 57, 58, 59,
-    58, 59, 60, 61, 60, 61, 60, 61, 62, 63, 64, 65, 64, 65, 66, 67,
-    66, 67, 66, 67, 68, 69, 68, 69, 70, 71, 70, 71, 70, 71, 72, 73,
-    72, 73, 72, 73, 74, 75, 74, 75, 74, 75, 76, 77, 76, 77, 126, 127
-  };
-
-
 static const uint8_t next_state_MPS[64] =
   {
     1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
@@ -151,7 +126,9 @@ static const uint8_t next_state_LPS[64] =
 
 
 
+#ifdef DE265_LOG_TRACE
 int logcnt=1;
+#endif
 
 void init_CABAC_decoder(CABAC_decoder* decoder, uint8_t* bitstream, int length)
 {
@@ -208,8 +185,10 @@ int  decode_CABAC_bit(CABAC_decoder* decoder, context_model* model)
 
       if (scaled_range < ( 256 << 7 ) )
         {
-          decoder->range = scaled_range >> 6;
-          decoder->value <<= 1;
+          // scaled range, highest bit (15) not set
+
+          decoder->range = scaled_range >> 6; // shift range by one bit
+          decoder->value <<= 1;               // shift value by one bit
           decoder->bits_needed++;
 
           if (decoder->bits_needed == 0)
@@ -230,7 +209,8 @@ int  decode_CABAC_bit(CABAC_decoder* decoder, context_model* model)
       decoder->value = (decoder->value - scaled_range);
 
       decoder->value <<= num_bits;
-      decoder->range   = LPS << num_bits;
+      decoder->range   = LPS << num_bits;  /* this is always >= 0x100 except for state 63,
+                                              but state 63 is never used */
       decoded_bit      = 1 - model->MPSbit;
 
       if (model->state==0) { model->MPSbit = 1-model->MPSbit; }
@@ -249,7 +229,9 @@ int  decode_CABAC_bit(CABAC_decoder* decoder, context_model* model)
     }
 
   logtrace(LogCABAC,"[%3d] -> bit %d  r:%x v:%x\n", logcnt, decoded_bit, decoder->range, decoder->value);
+#ifdef DE265_LOG_TRACE
   logcnt++;
+#endif
 
   //assert(decoder->range>=0x100);
 
@@ -321,7 +303,9 @@ int  decode_CABAC_bypass(CABAC_decoder* decoder)
     }
 
   logtrace(LogCABAC,"[%3d] -> bit %d  r:%x v:%x\n", logcnt, bit, decoder->range, decoder->value);
+#ifdef DE265_LOG_TRACE
   logcnt++;
+#endif
 
   //assert(decoder->range>=0x100);
 
@@ -353,14 +337,66 @@ int  decode_CABAC_TU(CABAC_decoder* decoder, int cMax, context_model* model)
   return cMax;
 }
 
+
+int  decode_CABAC_FL_bypass_parallel(CABAC_decoder* decoder, int nBits)
+{
+  logtrace(LogCABAC,"[%3d] bypass group r:%x v:%x\n",logcnt,decoder->range, decoder->value);
+
+  decoder->value <<= nBits;
+  decoder->bits_needed+=nBits;
+
+  if (decoder->bits_needed >= 0)
+    {
+      int input = *decoder->bitstream_curr++;
+      input <<= decoder->bits_needed;
+
+      decoder->bits_needed -= 8;
+      decoder->value |= input;
+    }
+
+  uint32_t scaled_range = decoder->range << 7;
+  int value = decoder->value / scaled_range;
+  decoder->value -= value * scaled_range;
+
+  logtrace(LogCABAC,"[%3d] -> value %d  r:%x v:%x\n", logcnt+nBits-1,
+           value, decoder->range, decoder->value);
+#ifdef DE265_LOG_TRACE
+  logcnt+=nBits;
+#endif
+
+  //assert(decoder->range>=0x100);
+
+  return value;
+}
+
+
 int  decode_CABAC_FL_bypass(CABAC_decoder* decoder, int nBits)
 {
-  // assert(nBits<8); // TODO: HM has fast code for reading 8 bypass bits at once. But does this ever occur?
-
   int value=0;
-  while (nBits--) {
-    value <<= 1;
-    value |= decode_CABAC_bypass(decoder);
+
+
+  if (nBits<=8) {
+    if (nBits==0) {
+      return 0;
+    }
+    // we could use decode_CABAC_bypass() for a single bit, but this seems to be slower
+#if 0
+    else if (nBits==1) {
+      value = decode_CABAC_bypass(decoder);
+    }
+#endif
+    else {
+      value = decode_CABAC_FL_bypass_parallel(decoder,nBits);
+    }
+  }
+  else {
+    value = decode_CABAC_FL_bypass_parallel(decoder,8);
+    nBits-=8;
+
+    while (nBits--) {
+      value <<= 1;
+      value |= decode_CABAC_bypass(decoder);
+    }
   }
 
   logtrace(LogCABAC,"      -> FL: %d\n", value);

@@ -29,6 +29,7 @@
 #define MAX_CTB_ROWS   68  // enough for 4K @ 32 pixel CTBs, but TODO: make this dynamic
 #define MAX_ENTRY_POINTS    MAX_CTB_ROWS
 #define MAX_THREAD_CONTEXTS MAX_CTB_ROWS
+#define MAX_REF_PIC_LIST (14+1)
 
 #define SLICE_TYPE_B 0
 #define SLICE_TYPE_P 1
@@ -154,6 +155,8 @@ typedef struct thread_context
 
   // residual data
 
+  uint8_t transform_skip_flag[3];
+
   ALIGNED_16(int16_t) coeffBuf[32*32]; // alignment required for SSE code !
 
   int16_t coeffList[3][32*32];
@@ -259,7 +262,7 @@ typedef struct slice_segment_header {
   int CurrRpsIdx;
   int MaxNumMergeCand;
 
-  int RefPicList[2][14+1];
+  int RefPicList[2][MAX_REF_PIC_LIST];
 
 
   // --- decoder runtime data ---
